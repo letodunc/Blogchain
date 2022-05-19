@@ -1,5 +1,5 @@
 [package]
-name = "pallet-template"
+name = "pallet-blogchain"
 version = "1.0.0-dev"
 description = "Template to start substrate node development."
 authors = ["Substrate DevHub <https://github.com/substrate-developer-hub>"]
