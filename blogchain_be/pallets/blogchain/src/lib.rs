@@ -25,17 +25,13 @@ pub use weights::WeightInfo;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
-pub const INVESTOR_ROLE: u16 = 1;
-pub const HOUSE_OWNER_ROLE: u16 = 2;
-pub const TENANT_ROLE: u16 = 3;
-
 #[frame_support::pallet]
 pub mod pallet {
    use super::*;
    use frame_support::{
       dispatch::DispatchResult,
       transactional,
-      sp_runtime::traits::{AccountIdConversion, Zero},
+      sp_runtime::traits::{AccountIdConversion, Zero, Hash},
       traits::{Currency, ExistenceRequirement, Get, ReservableCurrency},
       PalletId		
    };
@@ -57,8 +53,33 @@ pub mod pallet {
 
       /// Weight information for extrinsics in this pallet.
 		type WeightInfo: WeightInfo;
+      #[pallet::constant]
+      type BlogPostMinBytes: Get<u32>;
+
+      #[pallet::constant]
+      type BlogPostMaxBytes: Get<u32>;
+
+      #[pallet::constant]
+      type BlogPostCommentMinBytes: Get<u32>;
+
+      #[pallet::constant]
+      type BlogPostCommentMaxBytes: Get<u32>;
    }
    
+   #[derive(Clone, Encode, Decode, PartialEq, RuntimeDebug, TypeInfo)]
+   #[scale_info(skip_type_params(T))]
+   pub struct BlogPost<T: Config> {
+         pub content: Vec<u8>,
+         pub author: <T as frame_system::Config>::AccountId,
+   }
+
+   #[derive(Clone, Encode, Decode, PartialEq, RuntimeDebug, TypeInfo)]
+   #[scale_info(skip_type_params(T))]
+   pub struct BlogPostComment<T: Config> {
+         pub content: Vec<u8>,
+         pub blog_post_id: T::Hash,
+         pub author: <T as frame_system::Config>::AccountId,
+   }
    
    #[pallet::pallet]
    #[pallet::generate_store(pub(super) trait Store)]
@@ -82,6 +103,17 @@ pub mod pallet {
       SomethingElt<T>, 
       OptionQuery
       >;
+
+   /// Storage Map for BlogPosts by BlogPostId (Hash) to a BlogPost
+   #[pallet::storage]
+   #[pallet::getter(fn blog_posts)]
+   pub(super) type BlogPosts<T: Config> = StorageMap<_, Twox64Concat, T::Hash, BlogPost<T>>;
+
+   /// Storage Map from BlogPostId (Hash) to a list of BlogPostComments for this BlogPost
+   #[pallet::storage]
+   #[pallet::getter(fn blog_post_comments)]
+   pub(super) type BlogPostComments<T: Config> =
+         StorageMap<_, Twox64Concat, T::Hash, Vec<BlogPostComment<T>>>;
    
 
    // Pallets use events to inform users when important changes are made.
@@ -93,6 +125,9 @@ pub mod pallet {
       /// parameters. [something, who]
       SomethingStored(u32, T::AccountId),
       SomethingEltStored(BalanceOf<T>, Vec<u8>, T::AccountId, BlockNumberOf<T>),
+      BlogPostCreated(Vec<u8>, T::AccountId, T::Hash),
+      BlogPostCommentCreated(Vec<u8>, T::AccountId, T::Hash),
+      Tipped(T::AccountId, T::Hash)
    }
    
 
@@ -102,7 +137,13 @@ pub mod pallet {
       /// Error names should be descriptive.
       NoneValue,
       /// Errors should have helpful documentation associated with them.
-      StorageOverflow
+      StorageOverflow,
+      BlogPostNotEnoughBytes,
+      BlogPostTooManyBytes,
+      BlogPostCommentNotEnoughBytes,
+      BlogPostCommentTooManyBytes,
+      BlogPostNotFound,
+      TipperIsAuthor
    }
    
 
@@ -174,6 +215,102 @@ pub mod pallet {
                Ok(())
             },
          }
+      }
+
+      #[pallet::weight(10000)]
+      #[transactional]
+      pub fn create_blog_post(origin: OriginFor<T>, content: Vec<u8>) -> DispatchResult {
+         let author = ensure_signed(origin)?;
+
+         ensure!(
+            (content.len() as u32) > T::BlogPostMinBytes::get(),
+            <Error<T>>::BlogPostNotEnoughBytes
+         );
+
+         ensure!(
+            (content.len() as u32) < T::BlogPostMaxBytes::get(),
+            <Error<T>>::BlogPostTooManyBytes
+         );
+
+         let blog_post = BlogPost { content: content.clone(), author: author.clone() };
+
+         let blog_post_id = T::Hashing::hash_of(&blog_post);
+
+         <BlogPosts<T>>::insert(blog_post_id, blog_post);
+
+         let comments_vec : Vec<BlogPostComment<T>> = Vec::new();
+         <BlogPostComments<T>>::insert(blog_post_id, comments_vec);
+
+         Self::deposit_event(Event::BlogPostCreated(content, author, blog_post_id));
+
+         Ok(())
+      }
+
+      #[pallet::weight(5000)]
+      pub fn create_blog_comment(
+         origin: OriginFor<T>,
+         content: Vec<u8>,
+         blog_post_id: T::Hash
+      ) -> DispatchResult{
+         let comment_author = ensure_signed(origin)?;
+
+         ensure!(
+            (content.len() as u32) > T::BlogPostMinBytes::get(),
+            <Error<T>>::BlogPostCommentNotEnoughBytes
+         );
+
+         ensure!(
+            (content.len() as u32) < T::BlogPostCommentMaxBytes::get(),
+            <Error<T>>::BlogPostCommentTooManyBytes
+         );
+
+         let blog_post_comment = BlogPostComment {
+            author: comment_author.clone(),
+            content: content.clone(),
+            blog_post_id: blog_post_id.clone()
+         };
+
+         <BlogPostComments<T>>::mutate(blog_post_id, |comments| match comments {
+            None => Err(()),
+            Some(vec) => {
+               vec.push(blog_post_comment);
+               Ok(())
+            }
+         })
+         .map_err(|_| <Error<T>>::BlogPostNotFound)?;
+
+         Self::deposit_event(Event::BlogPostCommentCreated(
+            content,
+            comment_author,
+            blog_post_id
+         ));
+
+         Ok(())
+      }
+
+      #[pallet::weight(500)]
+      pub fn tip_blog_post(
+         origin: OriginFor<T>,
+         blog_post_id: T::Hash,
+         amount: <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance
+      ) -> DispatchResult {
+         let tipper = ensure_signed(origin)?;
+
+         let blog_post = Self::blog_posts(&blog_post_id).ok_or(<Error<T>>::BlogPostNotFound)?;
+         let blog_post_author = blog_post.author;
+
+         ensure!(tipper != blog_post_author, <Error<T>>::TipperIsAuthor);
+
+         T::Currency::transfer(
+            &tipper,
+            &blog_post_author,
+            amount,
+            ExistenceRequirement::KeepAlive
+         )?;
+
+         Self::deposit_event(Event::Tipped(tipper, blog_post_id));
+
+         Ok(())
       }
    }
 }

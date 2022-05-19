@@ -26,7 +26,7 @@ use sp_version::RuntimeVersion;
 // A few exports that help ease life for downstream crates.
 pub use frame_support::{
 	construct_runtime, parameter_types,
-	traits::{KeyOwnerProofSystem, Randomness, StorageInfo},
+	traits::{Currency, KeyOwnerProofSystem, Randomness, StorageInfo},
 	weights::{
 		constants::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight, WEIGHT_PER_SECOND},
 		IdentityFee, Weight,
@@ -156,6 +156,10 @@ parameter_types! {
 	pub BlockLength: frame_system::limits::BlockLength = frame_system::limits::BlockLength
 		::max_with_normal_ratio(5 * 1024 * 1024, NORMAL_DISPATCH_RATIO);
 	pub const SS58Prefix: u8 = 42;
+	pub const BlogPostMinBytes: u32 = 64;
+	pub const BlogPostMaxBytes: u32 = 4096;
+	pub const BlogPostCommentMinBytes: u32 = 64;
+	pub const BlogPostCommentMaxBytes: u32 = 1024;
 }
 
 // Configure FRAME pallets to include in runtime.
@@ -301,6 +305,10 @@ impl pallet_blogchain::Config for Runtime {
 	type Currency = Balances;
 	type MinContribution = MinContribution;
 	type WeightInfo = pallet_blogchain::weights::SubstrateWeight<Runtime>;
+	type BlogPostMinBytes = BlogPostMinBytes;
+	type BlogPostMaxBytes = BlogPostMaxBytes;
+	type BlogPostCommentMinBytes = BlogPostCommentMinBytes;
+	type BlogPostCommentMaxBytes = BlogPostCommentMaxBytes;
 }
 
 parameter_types! {
